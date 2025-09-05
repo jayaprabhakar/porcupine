@@ -18,14 +18,13 @@ type registerInput struct {
 }
 
 // a sequential specification of a register
-var registerModel = Model{
-	Init: func() interface{} {
+var registerModel = Model[int, registerInput, int]{
+	Init: func() int {
 		return 0
 	},
 	// step function: takes a state, input, and output, and returns whether it
 	// was a legal operation, along with a new state
-	Step: func(state, input, output interface{}) (bool, interface{}) {
-		regInput := input.(registerInput)
+	Step: func(state int, regInput registerInput, output int) (bool, int) {
 		if regInput.op == false {
 			return true, regInput.value // always ok to execute a put
 		} else {
@@ -33,13 +32,12 @@ var registerModel = Model{
 			return readCorrectValue, state // state is unchanged
 		}
 	},
-	DescribeOperation: func(input, output interface{}) string {
-		inp := input.(registerInput)
-		switch inp.op {
+	DescribeOperation: func(input registerInput, output int) string {
+		switch input.op {
 		case true:
-			return fmt.Sprintf("get() -> '%d'", output.(int))
+			return fmt.Sprintf("get() -> '%d'", output)
 		case false:
-			return fmt.Sprintf("put('%d')", inp.value)
+			return fmt.Sprintf("put('%d')", input.value)
 		}
 		return "<invalid>" // unreachable
 	},
@@ -137,53 +135,48 @@ type etcdOutput struct {
 	unknown bool // used when operation times out
 }
 
-var etcdModel = Model{
-	Init: func() interface{} { return -1000000 }, // -1000000 corresponds with nil
-	Step: func(state interface{}, input interface{}, output interface{}) (bool, interface{}) {
-		st := state.(int)
-		inp := input.(etcdInput)
-		out := output.(etcdOutput)
-		if inp.op == 0 {
+var etcdModel = Model[int, etcdInput, etcdOutput]{
+	Init: func() int { return -1000000 }, // -1000000 corresponds with nil
+	Step: func(state int, input etcdInput, output etcdOutput) (bool, int) {
+		if input.op == 0 {
 			// read
-			ok := (out.exists == false && st == -1000000) || (out.exists == true && st == out.value) || out.unknown
+			ok := (output.exists == false && state == -1000000) || (output.exists == true && state == output.value) || output.unknown
 			return ok, state
-		} else if inp.op == 1 {
+		} else if input.op == 1 {
 			// write
-			return true, inp.arg1
+			return true, input.arg1
 		} else {
 			// cas
-			ok := (inp.arg1 == st && out.ok) || (inp.arg1 != st && !out.ok) || out.unknown
-			result := st
-			if inp.arg1 == st {
-				result = inp.arg2
+			ok := (input.arg1 == state && output.ok) || (input.arg1 != state && !output.ok) || output.unknown
+			result := state
+			if input.arg1 == state {
+				result = input.arg2
 			}
 			return ok, result
 		}
 	},
-	DescribeOperation: func(input, output interface{}) string {
-		inp := input.(etcdInput)
-		out := output.(etcdOutput)
-		switch inp.op {
+	DescribeOperation: func(input etcdInput, output etcdOutput) string {
+		switch input.op {
 		case 0:
 			var read string
-			if out.exists {
-				read = fmt.Sprintf("%d", out.value)
+			if output.exists {
+				read = fmt.Sprintf("%d", output.value)
 			} else {
 				read = "null"
 			}
 			return fmt.Sprintf("read() -> %s", read)
 		case 1:
-			return fmt.Sprintf("write(%d)", inp.arg1)
+			return fmt.Sprintf("write(%d)", input.arg1)
 		case 2:
 			var ret string
-			if out.unknown {
+			if output.unknown {
 				ret = "unknown"
-			} else if out.ok {
+			} else if output.ok {
 				ret = "ok"
 			} else {
 				ret = "fail"
 			}
-			return fmt.Sprintf("cas(%d, %d) -> %s", inp.arg1, inp.arg2, ret)
+			return fmt.Sprintf("cas(%d, %d) -> %s", input.arg1, input.arg2, ret)
 
 		default:
 			return "<invalid>"
@@ -1138,7 +1131,7 @@ type kvOutput struct {
 	value string
 }
 
-var kvModel = Model{
+var kvModel = Model[string, kvInput, kvOutput]{
 	Partition: func(history []Operation) [][]Operation {
 		m := make(map[string][]Operation)
 		for _, v := range history {
@@ -1175,36 +1168,31 @@ var kvModel = Model{
 		}
 		return ret
 	},
-	Init: func() interface{} {
+	Init: func() string {
 		// note: we are modeling a single key's value here;
 		// we're partitioning by key, so this is okay
 		return ""
 	},
-	Step: func(state, input, output interface{}) (bool, interface{}) {
-		inp := input.(kvInput)
-		out := output.(kvOutput)
-		st := state.(string)
-		if inp.op == 0 {
+	Step: func(state string, input kvInput, output kvOutput) (bool, string) {
+		if input.op == 0 {
 			// get
-			return out.value == st, state
-		} else if inp.op == 1 {
+			return output.value == state, state
+		} else if input.op == 1 {
 			// put
-			return true, inp.value
+			return true, input.value
 		} else {
 			// append
-			return true, (st + inp.value)
+			return true, (state + input.value)
 		}
 	},
-	DescribeOperation: func(input, output interface{}) string {
-		inp := input.(kvInput)
-		out := output.(kvOutput)
-		switch inp.op {
+	DescribeOperation: func(input kvInput, output kvOutput) string {
+		switch input.op {
 		case 0:
-			return fmt.Sprintf("get('%s') -> '%s'", inp.key, out.value)
+			return fmt.Sprintf("get('%s') -> '%s'", input.key, output.value)
 		case 1:
-			return fmt.Sprintf("put('%s', '%s')", inp.key, inp.value)
+			return fmt.Sprintf("put('%s', '%s')", input.key, input.value)
 		case 2:
-			return fmt.Sprintf("append('%s', '%s')", inp.key, inp.value)
+			return fmt.Sprintf("append('%s', '%s')", input.key, input.value)
 		default:
 			return "<invalid>"
 		}
@@ -1215,30 +1203,27 @@ var kvModel = Model{
 //
 // this is a silly way to do things (it's way slower!) but good for
 // demonstration, testing, and benchmark purposes
-var kvNoPartitionModel = Model{
-	Init: func() interface{} {
+var kvNoPartitionModel = Model[map[string]string, kvInput, kvOutput]{
+	Init: func() map[string]string {
 		return make(map[string]string)
 	},
-	Step: func(state, input, output interface{}) (bool, interface{}) {
-		inp := input.(kvInput)
-		out := output.(kvOutput)
-		st := state.(map[string]string)
-		if inp.op == 0 {
+	Step: func(state map[string]string, input kvInput, output kvOutput) (bool, map[string]string) {
+		if input.op == 0 {
 			// get
-			return out.value == st[inp.key], state
-		} else if inp.op == 1 {
+			return output.value == state[input.key], state
+		} else if input.op == 1 {
 			// put
-			st2 := cloneMap(st)
-			st2[inp.key] = inp.value
+			st2 := cloneMap(state)
+			st2[input.key] = input.value
 			return true, st2
 		} else {
 			// append
-			st2 := cloneMap(st)
-			st2[inp.key] = st2[inp.key] + inp.value
+			st2 := cloneMap(state)
+			st2[input.key] = st2[input.key] + input.value
 			return true, st2
 		}
 	},
-	Equal: func(state1, state2 interface{}) bool {
+	Equal: func(state1, state2 map[string]string) bool {
 		return reflect.DeepEqual(state1, state2)
 	},
 }
@@ -1332,13 +1317,12 @@ func parseKvLog(filename string) []Event {
 
 func checkKv(t *testing.T, logName string, correct bool, partition bool) {
 	events := parseKvLog(fmt.Sprintf("test_data/kv/%s.txt", logName))
-	var model Model
+	var res bool
 	if partition {
-		model = kvModel
+		res = CheckEvents(kvModel, events)
 	} else {
-		model = kvNoPartitionModel
+		res = CheckEvents(kvNoPartitionModel, events)
 	}
-	res := CheckEvents(model, events)
 	if res != correct {
 		t.Fatalf("expected output %t, got output %t", correct, res)
 	}
@@ -1394,15 +1378,16 @@ func TestKvNoPartition10ClientsBad(t *testing.T) {
 
 func benchKv(b *testing.B, logName string, correct bool, partition bool) {
 	events := parseKvLog(fmt.Sprintf("test_data/kv/%s.txt", logName))
-	var model Model
-	if partition {
-		model = kvModel
-	} else {
-		model = kvNoPartitionModel
-	}
+
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		res := CheckEvents(model, events)
+		var res bool
+		if partition {
+			res = CheckEvents(kvModel, events)
+		} else {
+			res = CheckEvents(kvNoPartitionModel, events)
+		}
+
 		if res != correct {
 			b.Fatalf("expected output %t, got output %t", correct, res)
 		}
@@ -1475,28 +1460,25 @@ func TestSetModel(t *testing.T) {
 		unknown bool  // read
 	}
 
-	setModel := Model{
-		Init: func() interface{} { return []int{} },
-		Step: func(state interface{}, input interface{}, output interface{}) (bool, interface{}) {
-			st := state.([]int)
-			inp := input.(setInput)
-			out := output.(setOutput)
+	setModel := Model[[]int, setInput, setOutput]{
+		Init: func() []int { return []int{} },
+		Step: func(state []int, input setInput, output setOutput) (bool, []int) {
 
-			if inp.op == true {
+			if input.op == true {
 				// always returns true for write
-				index := sort.SearchInts(st, inp.value)
-				if index >= len(st) || st[index] != inp.value {
+				index := sort.SearchInts(state, input.value)
+				if index >= len(state) || state[index] != input.value {
 					// value not in the set
-					st = append(st, inp.value)
-					sort.Ints(st)
+					state = append(state, input.value)
+					sort.Ints(state)
 				}
-				return true, st
+				return true, state
 			}
 
-			sort.Ints(out.values)
-			return out.unknown || reflect.DeepEqual(st, out.values), out.values
+			sort.Ints(output.values)
+			return output.unknown || reflect.DeepEqual(state, output.values), output.values
 		},
-		Equal: func(state1, state2 interface{}) bool {
+		Equal: func(state1, state2 []int) bool {
 			return reflect.DeepEqual(state1, state2)
 		},
 	}
@@ -1569,14 +1551,14 @@ type nondeterministicRegisterInput struct {
 	value []int
 }
 
-func subsets(v []int) []interface{} {
+func subsets(v []int) []nondeterministicRegisterState {
 	if len(v) == 0 {
-		return []interface{}{[]int{}}
+		return []nondeterministicRegisterState{{}}
 	}
-	ss := []interface{}{}
+	ss := []nondeterministicRegisterState{}
 	for _, subset := range subsets(v[1:]) {
 		ss = append(ss, subset)
-		ss = append(ss, append([]int{v[0]}, subset.([]int)...))
+		ss = append(ss, append(nondeterministicRegisterState{v[0]}, subset...))
 	}
 	return ss
 }
@@ -1609,15 +1591,15 @@ func setEqual(s1, s2 []int) bool {
 	return true
 }
 
-var nondeterministicRegisterModel = NondeterministicModel{
-	Init: func() []interface{} {
-		states := []interface{}{nondeterministicRegisterState{}}
+var nondeterministicRegisterModel = NondeterministicModel[nondeterministicRegisterState, nondeterministicRegisterInput, []int]{
+	Init: func() []nondeterministicRegisterState {
+		states := []nondeterministicRegisterState{{}}
 		return states
 	},
-	Step: func(state interface{}, input interface{}, output interface{}) []interface{} {
-		st := state.(nondeterministicRegisterState)
-		inp := input.(nondeterministicRegisterInput)
-		out := output.([]int)
+	Step: func(state nondeterministicRegisterState, input nondeterministicRegisterInput, output []int) []nondeterministicRegisterState {
+		st := state
+		inp := input
+		out := output
 		if inp.op == 1 {
 			return subsets(inp.value)
 		} else if inp.op == 2 {
@@ -1636,31 +1618,29 @@ var nondeterministicRegisterModel = NondeterministicModel{
 				}
 			}
 			if isSubset {
-				return []interface{}{st}
+				return []nondeterministicRegisterState{st}
 			}
-			return []interface{}{}
+			return []nondeterministicRegisterState{}
 		} else {
 			if setEqual(st, out) {
-				return []interface{}{st}
+				return []nondeterministicRegisterState{st}
 			}
-			return []interface{}{}
+			return []nondeterministicRegisterState{}
 		}
 	},
-	Equal: func(state1, state2 interface{}) bool {
-		st1 := state1.(nondeterministicRegisterState)
-		st2 := state2.(nondeterministicRegisterState)
-		return setEqual(st1, st2)
+	Equal: func(state1, state2 nondeterministicRegisterState) bool {
+		return setEqual(state1, state2)
 	},
 	// step function: takes a state, input, and output, and returns all possible next states
-	DescribeOperation: func(input, output interface{}) string {
-		inp := input.(nondeterministicRegisterInput)
+	DescribeOperation: func(input nondeterministicRegisterInput, output []int) string {
+		inp := input
 		switch inp.op {
 		case 1:
 			return fmt.Sprintf("put-any(%v)", inp.value)
 		case 2:
-			return fmt.Sprintf("get-any() -> %v", output.([]int))
+			return fmt.Sprintf("get-any() -> %v", output)
 		case 3:
-			return fmt.Sprintf("get-all() -> %v", output.([]int))
+			return fmt.Sprintf("get-all() -> %v", output)
 		}
 		return "<invalid>" // unreachable
 	},

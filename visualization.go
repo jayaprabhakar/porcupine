@@ -134,7 +134,7 @@ func timestampMapping(info LinearizationInfo) map[int64]int {
 	return mapping
 }
 
-func computeVisualizationData(model Model, info LinearizationInfo) visualizationData {
+func computeVisualizationData[S, I, O any](model Model[S, I, O], info LinearizationInfo) visualizationData {
 	timeMap := timestampMapping(info)
 	model = fillDefault(model)
 	partitions := make([]partitionVisualizationData, len(info.history))
@@ -142,20 +142,20 @@ func computeVisualizationData(model Model, info LinearizationInfo) visualization
 		// history
 		n := len(info.history[partition]) / 2
 		history := make([]historyElement, n)
-		callValue := make(map[int]interface{})
-		returnValue := make(map[int]interface{})
+		callValue := make(map[int]I)
+		returnValue := make(map[int]O)
 		for _, elem := range info.history[partition] {
 			switch elem.kind {
 			case callEntry:
 				history[elem.id].ClientId = elem.clientId
 				history[elem.id].Start = timeMap[elem.time]
 				history[elem.id].OriginalStart = fmt.Sprintf("%d", elem.time)
-				callValue[elem.id] = elem.value
+				callValue[elem.id] = elem.value.(I)
 			case returnEntry:
 				history[elem.id].End = timeMap[elem.time]
 				history[elem.id].OriginalEnd = fmt.Sprintf("%d", elem.time)
-				history[elem.id].Description = model.DescribeOperation(callValue[elem.id], elem.value)
-				returnValue[elem.id] = elem.value
+				history[elem.id].Description = model.DescribeOperation(callValue[elem.id], elem.value.(O))
+				returnValue[elem.id] = elem.value.(O)
 			}
 			// historyElement.Annotation defaults to false, so we
 			// don't need to explicitly set it here; all of these
@@ -227,7 +227,7 @@ func computeVisualizationData(model Model, info LinearizationInfo) visualization
 //
 // This function writes the visualization, an HTML file with embedded
 // JavaScript and data, to the given output.
-func Visualize(model Model, info LinearizationInfo, output io.Writer) error {
+func Visualize[S, I, O any](model Model[S, I, O], info LinearizationInfo, output io.Writer) error {
 	data := computeVisualizationData(model, info)
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -246,7 +246,7 @@ func Visualize(model Model, info LinearizationInfo, output io.Writer) error {
 
 // VisualizePath is a wrapper around [Visualize] to write the visualization to
 // a file path.
-func VisualizePath(model Model, info LinearizationInfo, path string) error {
+func VisualizePath[S, I, O any](model Model[S, I, O], info LinearizationInfo, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err

@@ -208,12 +208,12 @@ func makeLinkedEntries(entries []entry) *node {
 	return root
 }
 
-type cacheEntry struct {
+type cacheEntry[S any] struct {
 	linearized bitset
-	state      interface{}
+	state      S
 }
 
-func cacheContains(model Model, cache map[uint64][]cacheEntry, entry cacheEntry) bool {
+func cacheContains[S, I, O any](model Model[S, I, O], cache map[uint64][]cacheEntry[S], entry cacheEntry[S]) bool {
 	for _, elem := range cache[entry.linearized.hash()] {
 		if entry.linearized.equals(elem.linearized) && model.Equal(entry.state, elem.state) {
 			return true
@@ -222,9 +222,9 @@ func cacheContains(model Model, cache map[uint64][]cacheEntry, entry cacheEntry)
 	return false
 }
 
-type callsEntry struct {
+type callsEntry[S any] struct {
 	entry *node
-	state interface{}
+	state S
 }
 
 func lift(entry *node) {
@@ -247,12 +247,12 @@ func unlift(entry *node) {
 	entry.next.prev = entry
 }
 
-func checkSingle(model Model, history []entry, computePartial bool, kill *int32) (bool, []*[]int) {
+func checkSingle[S, I, O any](model Model[S, I, O], history []entry, computePartial bool, kill *int32) (bool, []*[]int) {
 	entry := makeLinkedEntries(history)
 	n := length(entry) / 2
 	linearized := newBitset(uint(n))
-	cache := make(map[uint64][]cacheEntry) // map from hash to cache entry
-	var calls []callsEntry
+	cache := make(map[uint64][]cacheEntry[S]) // map from hash to cache entry
+	var calls []callsEntry[S]
 	// longest linearizable prefix that includes the given entry
 	longest := make([]*[]int, n)
 
@@ -264,14 +264,14 @@ func checkSingle(model Model, history []entry, computePartial bool, kill *int32)
 		}
 		if entry.match != nil {
 			matching := entry.match // the return entry
-			ok, newState := model.Step(state, entry.value, matching.value)
+			ok, newState := model.Step(state, entry.value.(I), matching.value.(O))
 			if ok {
 				newLinearized := linearized.clone().set(uint(entry.id))
-				newCacheEntry := cacheEntry{newLinearized, newState}
+				newCacheEntry := cacheEntry[S]{newLinearized, newState}
 				if !cacheContains(model, cache, newCacheEntry) {
 					hash := newLinearized.hash()
 					cache[hash] = append(cache[hash], newCacheEntry)
-					calls = append(calls, callsEntry{entry, state})
+					calls = append(calls, callsEntry[S]{entry, state})
 					state = newState
 					linearized.set(uint(entry.id))
 					lift(entry)
@@ -323,7 +323,7 @@ func checkSingle(model Model, history []entry, computePartial bool, kill *int32)
 	return true, longest
 }
 
-func fillDefault(model Model) Model {
+func fillDefault[S, I, O any](model Model[S, I, O]) Model[S, I, O] {
 	if model.Partition == nil {
 		model.Partition = noPartition
 	}
@@ -331,18 +331,27 @@ func fillDefault(model Model) Model {
 		model.PartitionEvent = noPartitionEvent
 	}
 	if model.Equal == nil {
-		model.Equal = shallowEqual
+		// model.Equal = shallowEqual
+		model.Equal = func(a, b S) bool {
+			return shallowEqual(a, b)
+		}
 	}
 	if model.DescribeOperation == nil {
-		model.DescribeOperation = defaultDescribeOperation
+		// model.DescribeOperation = defaultDescribeOperation
+		model.DescribeOperation = func(input I, output O) string {
+			return defaultDescribeOperation(input, output)
+		}
 	}
 	if model.DescribeState == nil {
-		model.DescribeState = defaultDescribeState
+		// model.DescribeState = defaultDescribeState
+		model.DescribeState = func(state S) string {
+			return defaultDescribeState(state)
+		}
 	}
 	return model
 }
 
-func checkParallel(model Model, history [][]entry, computeInfo bool, timeout time.Duration) (CheckResult, LinearizationInfo) {
+func checkParallel[S, I, O any](model Model[S, I, O], history [][]entry, computeInfo bool, timeout time.Duration) (CheckResult, LinearizationInfo) {
 	if len(history) == 0 {
 		return Ok, LinearizationInfo{}
 	}
@@ -424,7 +433,7 @@ loop:
 	return result, info
 }
 
-func checkEvents(model Model, history []Event, verbose bool, timeout time.Duration) (CheckResult, LinearizationInfo) {
+func checkEvents[S, I, O any](model Model[S, I, O], history []Event, verbose bool, timeout time.Duration) (CheckResult, LinearizationInfo) {
 	model = fillDefault(model)
 	partitions := model.PartitionEvent(history)
 	l := make([][]entry, len(partitions))
@@ -434,7 +443,7 @@ func checkEvents(model Model, history []Event, verbose bool, timeout time.Durati
 	return checkParallel(model, l, verbose, timeout)
 }
 
-func checkOperations(model Model, history []Operation, verbose bool, timeout time.Duration) (CheckResult, LinearizationInfo) {
+func checkOperations[S, I, O any](model Model[S, I, O], history []Operation, verbose bool, timeout time.Duration) (CheckResult, LinearizationInfo) {
 	model = fillDefault(model)
 	partitions := model.Partition(history)
 	l := make([][]entry, len(partitions))
